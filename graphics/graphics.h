@@ -20,6 +20,7 @@ public:
     Renderer(Window& win);
     operator  bool() const;
     void draw_point(SDL_Color color, SDL_Point p);
+    void fill_rect(SDL_Color color, SDL_Rect rect);
     void update();
     SDL_Renderer* get();
     ~Renderer();
@@ -58,6 +59,46 @@ public:
     SDL_Rect const & get_rect();
 };
 
+class Root{
+public:
+    enum RootState {HIDDEN, SHOWN, HOVER};
+private:
+    RootState state;
+    SDL_Rect off_texture;
+    SDL_Rect hover_texture;
+    SDL_Rect rect;
+    int click_timer;
+public:
+    Root(SDL_Rect off_texture, SDL_Rect hover_texture, SDL_Rect rect);
+    void update();
+    void pick();
+    void release(SDL_Point p);
+    void hover();
+    void off();
+    bool is_hidden();
+    bool can_be_released();
+    void draw(Renderer &renderer, SafeTexture &texture_atlas);
+    SDL_Rect const & get_rect();
+};
+
+class SelectBox{
+    SDL_Color color;
+    SDL_Rect rect;
+    SDL_Point start;
+    SDL_Point end;
+    bool active;
+public:
+    SelectBox(SDL_Color color);
+    void start_at(SDL_Point p);
+    void end_at(SDL_Point p);
+    void release();
+    bool is_active(){
+        return active;
+    }
+    void draw(Renderer &renderer);
+    SDL_Rect const & get_rect();
+};
+
 class App{
 public:
     enum Mode {NORMAL, ADD, MOVE};
@@ -69,6 +110,9 @@ private:
     std::unique_ptr<Renderer> renderer;
     std::unique_ptr<SafeTexture> texture_atlas;
     std::array<std::unique_ptr<Button>, 4> buttons; 
+    std::list<std::shared_ptr<Root> > roots; 
+    std::shared_ptr<Root> moving_root;
+    SelectBox select;
 public:
     App();
     void loop();
@@ -79,6 +123,8 @@ public:
     void move_mode();
     void refresh();
     void home();
+    void create_root(SDL_Point);
+    void move_root(std::shared_ptr<Root> root);
     ~App();
 };
 #endif

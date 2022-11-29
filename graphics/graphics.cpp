@@ -1,6 +1,7 @@
 #include "graphics.h"
 #include <unistd.h>
 #include <iostream>
+#include <cmath>
 
 Window::Window(SDL_Rect& frame){
     win_ptr = SDL_CreateWindow("", frame.x, frame.y, frame.w, frame.h, SDL_WINDOW_SHOWN);
@@ -25,6 +26,10 @@ Renderer::operator bool() const{
 void Renderer::draw_point(SDL_Color color, SDL_Point p){
     SDL_SetRenderDrawColor(render_ptr, color.r, color.g, color.b, color.a);
     SDL_RenderDrawPoint(render_ptr, p.x, p.y);
+}
+void Renderer::fill_rect(SDL_Color color, SDL_Rect rect){
+    SDL_SetRenderDrawColor(render_ptr, color.r, color.g, color.b, color.a);
+    SDL_RenderFillRect(render_ptr, &rect);
 }
 void Renderer::update(){
     SDL_RenderPresent(render_ptr);
@@ -92,7 +97,53 @@ void Button::update(){
 SDL_Rect const & Button::get_rect(){return rect;}
 
 
-App::App():frame({100,100,1000,600}), running(false), mode(NORMAL) 
+Root::Root(SDL_Rect off_texture, SDL_Rect hover_texture, SDL_Rect rect): 
+    off_texture(off_texture), hover_texture(hover_texture), rect(rect), state(RootState::SHOWN), click_timer(0){}
+void Root::pick(){state = RootState::HIDDEN; click_timer = 3;}
+void Root::release(SDL_Point p){state = RootState::SHOWN; rect.x = p.x; rect.y = p.y;}
+void Root::hover(){state = RootState::HOVER;}
+void Root::off(){state = RootState::SHOWN;}
+bool Root::is_hidden(){return state == RootState::HIDDEN;}
+bool Root::can_be_released(){return click_timer == 0;}
+void Root::draw(Renderer &renderer, SafeTexture &texture_atlas){
+    if (state == SHOWN){
+        SDL_RenderCopy(renderer.get(), texture_atlas.get(), &off_texture, &rect);
+    }else if (state == HOVER){
+        SDL_RenderCopy(renderer.get(), texture_atlas.get(), &hover_texture, &rect);
+    }
+}
+void Root::update(){
+    if (click_timer > 0){
+        click_timer --;
+    }
+}
+SDL_Rect const & Root::get_rect(){return rect;}
+
+SelectBox::SelectBox(SDL_Color color): color(color), rect({0,0,0,0}), start({0,0}), end({0,0}),
+                                            active(false){}
+void SelectBox::start_at(SDL_Point p){
+    start = p;
+    active = true;
+}
+void SelectBox::end_at(SDL_Point p){
+    end = p;
+    rect.x = std::min(start.x, end.x); 
+    rect.y = std::min(start.y, end.y);
+    rect.w = std::abs(start.x - end.x);
+    rect.h = std::abs(start.y - end.y);
+}
+void SelectBox::draw(Renderer &renderer){
+    renderer.fill_rect(color, rect);
+}
+void SelectBox::release(){
+    rect = {0,0,0,0};
+    start = {0,0};
+    end = {0,0};
+    active = false;
+}
+SDL_Rect const & SelectBox::get_rect(){return rect;}
+
+App::App():frame({100,100,1000,600}), running(false), mode(NORMAL), select(SDL_Color({164, 197, 250, 200}))
     {
     if(SDL_Init(SDL_INIT_VIDEO) == 0){
         win.reset(new Window(frame));
@@ -131,6 +182,12 @@ void App::proccess_events(){
                 if (SDL_PointInRect(&mouse_pos, &((*it)->get_rect())))
                 (*it)->press();
             }
+            if (mode == Mode::NORMAL){
+                if (!select.is_active()){
+                    select.start_at(mouse_pos);
+                }
+            }
+
 
         }else if(event.type == SDL_MOUSEBUTTONUP){
             SDL_Point mouse_pos({event.button.x, event.button.y});
@@ -140,6 +197,24 @@ void App::proccess_events(){
                 (*it)->release();
             }
 
+            if (mode == Mode::NORMAL){
+                select.release();
+            }
+            else if (mode == Mode::ADD){
+                create_root(mouse_pos);
+            }else if (mode == Mode::MOVE){
+                if (moving_root){
+                    if (moving_root->can_be_released()){
+                        moving_root->release(SDL_Point({mouse_pos.x - 10, mouse_pos.y - 10}));
+                        moving_root.reset();
+                    }            
+                }else{
+                    for (auto it = roots.begin(); it != roots.end(); ++it){
+                        if (SDL_PointInRect(&mouse_pos, &((*it)->get_rect())))
+                            move_root(*it);
+                    }
+                }
+            }
         }else if(event.type == SDL_MOUSEMOTION){
             SDL_Point mouse_pos({event.motion.x, event.motion.y});
             for (auto it = buttons.begin(); it != buttons.end(); ++it){
@@ -149,6 +224,22 @@ void App::proccess_events(){
                     (*it)->off();
                 }
             }
+            if (mode == Mode::NORMAL){
+                if (select.is_active()){
+                    select.end_at(mouse_pos);
+                }
+            }
+            else if (mode == Mode::MOVE){
+                for (auto it = roots.begin(); it != roots.end(); ++it){
+                    if ((*it)->is_hidden())
+                        continue;
+
+                    if (SDL_PointInRect(&mouse_pos, &((*it)->get_rect())))
+                        (*it)->hover();
+                    else
+                        (*it)->off();
+                }
+            }
         }
     }
 }
@@ -156,7 +247,13 @@ void App::loop(){
     for (auto it = buttons.begin(); it != buttons.end(); ++it){
         (*it)->update();
     }
-
+    for (auto it = roots.begin(); it != roots.end(); ++it){
+        (*it)->update();
+    }
+    if (moving_root && mode != Mode::MOVE){
+        moving_root->off();
+        moving_root.reset();
+    }
 }
 void App::render(){
     for (unsigned i = 0; i < frame.h; ++i){
@@ -164,9 +261,13 @@ void App::render(){
             renderer->draw_point(SDL_Color({0,0,0,255}), SDL_Point({j, i}));
         }
     }
+
+    for (auto it = roots.begin(); it != roots.end(); ++it)
+        (*it)->draw(*renderer, *texture_atlas);
     for (auto it = buttons.begin(); it != buttons.end(); ++it){
         (*it)->draw(*renderer, *texture_atlas);
     }
+    select.draw(*renderer);
     
     renderer->update();
 }
@@ -189,6 +290,13 @@ void App::home(){
 }
 void App::move_mode(){
     mode = Mode::MOVE;
+}
+void App::move_root(std::shared_ptr<Root> root){
+    moving_root = root;
+    root->pick();
+}
+void App::create_root(SDL_Point p){
+    roots.push_back(std::make_shared<Root>(Root(SDL_Rect({0,400,20,20}), SDL_Rect({20,400,20,20}), SDL_Rect({p.x - 10, p.y - 10, 20, 20})))); 
 }
 
 App::~App(){
